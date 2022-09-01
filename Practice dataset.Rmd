@@ -43,7 +43,7 @@ pbmc1k
 ```
 
 ### 2. QC
-```{r Quality Control}
+```{r QC}
 ### % MT reads --- denotes the set of mitocondrial genes (low-quality / dying cells exhibiting extensive mt contamination)
 pbmc1k[["percent.mt"]] <- PercentageFeatureSet(pbmc1k, pattern = "^MT-")
 View(pbmc1k@meta.data)
@@ -102,14 +102,13 @@ pbmc1k <- JackStraw(pbmc1k, num.replicate = 100)
 pbmc1k <- ScoreJackStraw(pbmc1k, dims = 1:20)
 
 JackStrawPlot(pbmc1k, dims = 1:15)
-
 ```
-```{r QC continued}
+```{r QC continued.}
 ### --------- DETERMINE DATA DIMENSIONS ---------
 ElbowPlot(pbmc1k)
 ```
 
-```{r QC continued}
+```{r QC continued..}
 ### --------- CLUSTERING ---------
 # As plotted above, select top 10 PC to have captured the most variation in this dataset.
 # Hence the dimentionality of pbmc1k is the first 10 PC.
@@ -140,13 +139,12 @@ res0.3
 res0.5
 
 # setting identity of clusters for cells. Here we picked 0.3 resolution. (default was 0.5)
-Idents(pbmc1k)
 Idents(pbmc1k) <- "RNA_snn_res.0.3"
 Idents(pbmc1k)
 
 ```
 
-```{r QC continued}
+```{r QC continued...}
 ### ---------- NON_LINEAR dimensionality reduction ----------
 pbmc1k <- RunUMAP(pbmc1k, dims = 1:10, label = TRUE)
 DimPlot(pbmc1k, reduction = "umap")
