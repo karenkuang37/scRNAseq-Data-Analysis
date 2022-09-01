@@ -3,30 +3,154 @@ title: "Practice dataset (1K)"
 author: "Karen Kuang"
 date: "`r Sys.Date()`"
 output: github_document
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(Seurat)
+library(patchwork)
 ```
 
 ## Dataset overview
 
-This is an small dataset retrieved from 
+Moderate-size 1k peripheral blood mononuclear cells (PBMCs) from a Healthy Donor (v3 chemistry). PBMCs are primary cells with relatively small amounts of RNA.
 
+Data retrieved from https://www.10xgenomics.com/resources/datasets/1-k-pbm-cs-from-a-healthy-donor-v-3-chemistry-3-standard-3-0-0
 
+### 1. Load Seurat object
+```{r load PBMC feature matrix}
+# Load data using .RDS format
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Load data using .mtx file
 
-```{r cars}
-summary(cars)
+# Load data using .loom files
+
+# Load data using 10X CellRanger .HDF5 format
+pbmc1k.data <- Read10X_h5("pbmc_1k_v3_raw_feature_bc_matrix.h5",
+                          use.names = TRUE,
+                          unique.features = TRUE)
+str(pbmc1k.data)
+
+# Initialize the Seurat object with raw data
+pbmc1k <- CreateSeuratObject(counts = pbmc1k.data, project = "PBMC1k", min.cells = 3, min.features = 200)
+str(pbmc1k)
+pbmc1k
+# 15254 features across 1202 samples within 1 assay
 ```
 
-## Including Plots
+### 2. QC
+```{r Quality Control}
+### % MT reads --- denotes the set of mitocondrial genes (low-quality / dying cells exhibiting extensive mt contamination)
+pbmc1k[["percent.mt"]] <- PercentageFeatureSet(pbmc1k, pattern = "^MT-")
+View(pbmc1k@meta.data)
 
-You can also embed plots, for example:
+# Visualize QC metrics as a violin plot
+VlnPlot(pbmc1k, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# Visualize feature-feature relationships with scatter plot
+p1 <- FeatureScatter(pbmc1k,feature1 = "nCount_RNA", feature2 = "percent.mt")
+# as shown, majority of transcripts have decently low % MT
+p2 <- FeatureScatter(pbmc1k,feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + geom_smooth(method = 'lm')
+# x-axis = #transcripts, y-axis = #genes
+# as shown, most cells follow the line which is nice. (good cells should have a good number of genes AND molecules detected)
+p1+p2
+
+### ---------- FILTER -----------
+pbmc1k <- subset(pbmc1k, subset = nFeature_RNA > 200 & nFeature_RNA < 5000 & percent.mt < 20)
+# mt thresh selected according to plot, however as suggested in lit, a standardized 10% mtDNA should be applied to scRNA-seq QC of human samples?
+# *Find tutorial on DubletFinder, could be useful
+
+### ---------- NORMALIZATION -----------
+pbmc1k <- NormalizeData(pbmc1k)
+# pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+# Data is log-transformed, with a scale factor (10,000 by default)FEA
+
+### ---------- FEATURE SELECTION ----------
+pbmc1k <-FindVariableFeatures(pbmc1k, selection.method = "vst", nfeatures = 2000)
+# number of features set to 2000 by default
+# ID the top 10 most highly variable genes
+top10 <- head(VariableFeatures(pbmc1k),10)
+#  [1] "GNLY"   "IGLC2"  "IGLC3"  "FCGR3A" "PPBP"   "CDKN1C" "GZMB"   "ITM2C"  "IGKC"   "S100A9"
+p3 <- VariableFeaturePlot(pbmc1k)
+p4 <- LabelPoints(plot = p3, points = top10, repel = TRUE)
+p4
+# red dots refer to the 2000 highly variable features we indicated
+
+### ---------- SCALING to reduce batch effect ---------
+all.genes <- rownames(pbmc1k)
+pbmc1k <- ScaleData(pbmc1k, features = all.genes)
+# this is where linear transformation is applied, to give equal weight so that highly-expressed genes don't dominate in downstream analysis
+
+### ---------- LINEAR DIMENTIONALITY REDUCTION ------------
+pbmc1k <- RunPCA(pbmc1k, features = VariableFeatures(object = pbmc1k))
+print(pbmc1k[["pca"]], dims = 1:5, nfeatures = 5)
+# this is where PCA is performed on the scaled data, default is to only use those previously defined variable features. there seem to be 3 clusters?
+VizDimLoadings(pbmc1k, dims = 1:2, reduction = "pca")
+DimPlot(pbmc1k, reduction = "pca")
+# if we just look at 1 PC across 500 cells, 
+DimHeatmap(pbmc1k, dims = 1, cells = 500, balanced = TRUE)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r QC continued}
+### --------- DETERMINE DATA DIMENSIONS ---------
+pbmc1k <- JackStraw(pbmc1k, num.replicate = 100)
+pbmc1k <- ScoreJackStraw(pbmc1k, dims = 1:20)
+
+JackStrawPlot(pbmc1k, dims = 1:15)
+
+```
+```{r QC continued}
+### --------- DETERMINE DATA DIMENSIONS ---------
+ElbowPlot(pbmc1k)
+```
+
+```{r QC continued}
+### --------- CLUSTERING ---------
+# As plotted above, select top 10 PC to have captured the most variation in this dataset.
+# Hence the dimentionality of pbmc1k is the first 10 PC.
+pbmc1k <- FindNeighbors(pbmc1k, dims = 1:10)
+# this uses KNN method
+
+# understanding resolution
+pbmc1k <- FindClusters(pbmc1k, resolution = c(0.1, 0.3, 0.5, 0.7, 1))
+# Modularity Optimizer version 1.3.0 by Ludo Waltman and Nees Jan van Eck
+
+# Number of nodes: 1134
+# Number of edges: 35235
+
+# Running Louvain algorithm...
+# Maximum modularity in 10 random starts: 0.8902
+# Number of communities: 9
+
+View(pbmc1k@meta.data)
+res0.1 <- DimPlot(pbmc1k, group.by = "RNA_snn_res.0.1", label = TRUE)
+res0.3 <- DimPlot(pbmc1k, group.by = "RNA_snn_res.0.3", label = TRUE)
+res0.5 <- DimPlot(pbmc1k, group.by = "RNA_snn_res.0.5", label = TRUE)
+res0.7 <- DimPlot(pbmc1k, group.by = "RNA_snn_res.0.7", label = TRUE)
+res1.0 <- DimPlot(pbmc1k, group.by = "RNA_snn_res.1", label = TRUE)
+
+
+res0.1
+res0.3
+res0.5
+
+# setting identity of clusters for cells. Here we picked 0.3 resolution. (default was 0.5)
+Idents(pbmc1k)
+Idents(pbmc1k) <- "RNA_snn_res.0.3"
+Idents(pbmc1k)
+
+```
+
+```{r QC continued}
+### ---------- NON_LINEAR dimensionality reduction ----------
+pbmc1k <- RunUMAP(pbmc1k, dims = 1:10, label = TRUE)
+DimPlot(pbmc1k, reduction = "umap")
+
+saveRDS(pbmc1k, file = "pbmc1k.rds")
+```
+
